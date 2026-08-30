@@ -5,6 +5,136 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.3.33] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.32...v0.3.33) - 2026-08-30
+
+### Chores
+- *(deps)* bump quinn-proto from 0.11.14 to 0.11.16 ([#150](https://github.com/better-slop/hyprwhspr-rs/pull/150))
+
+
+### Fixes
+- bound evdev resync after input churn ([#151](https://github.com/better-slop/hyprwhspr-rs/pull/151))
+
+## [0.3.32] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.31...v0.3.32) - 2026-06-26
+
+### Fixes
+- refresh stale evdev devices ([#147](https://github.com/better-slop/hyprwhspr-rs/pull/147))
+
+## [0.3.31] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.30...v0.3.31) - 2026-06-21
+
+### Features
+- improve perf and tooling around resource analysis ([#145](https://github.com/better-slop/hyprwhspr-rs/pull/145))
+- *(text)* normalize transcripts with ITN ([#144](https://github.com/better-slop/hyprwhspr-rs/pull/144))
+- improve shortcut/input handling ([#143](https://github.com/better-slop/hyprwhspr-rs/pull/143))
+
+
+### Fixes
+- *(shortcuts)* input loss/rescan/change bugginess ([#139](https://github.com/better-slop/hyprwhspr-rs/pull/139))
+
+
+### Other
+- update readme
+
+## [0.3.30] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.29...v0.3.30) - 2026-06-08
+
+### Chores
+- *(docs)* update readme
+
+
+### Features
+- *(providers)* support subscription providers ([#137](https://github.com/better-slop/hyprwhspr-rs/pull/137))
+
+## [0.3.29] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.28...v0.3.29) - 2026-05-26
+
+### Features
+- *(config)* add versioned schema + bump openssl to 0.10.80 ([#133](https://github.com/better-slop/hyprwhspr-rs/pull/133))
+
+
+### Fixes
+- allow null vad max speech in schema ([#135](https://github.com/better-slop/hyprwhspr-rs/pull/135))
+
+## [0.3.28] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.27...v0.3.28) - 2026-05-25
+
+### Features
+- custom providers/openai compat ([#130](https://github.com/better-slop/hyprwhspr-rs/pull/130))
+
+## [0.3.27] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.26...v0.3.27) - 2026-05-09
+
+### Chores
+- update Cargo.lock dependencies
+
+## [0.3.26] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.25...v0.3.26) - 2026-04-25
+
+### Chores
+- update Cargo.lock dependencies
+
+## [0.3.25] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.24...v0.3.25) - 2026-04-16
+
+### Fixes
+- upgrade parakeet-rs for ort rc12 compatibility ([#121](https://github.com/better-slop/hyprwhspr-rs/pull/121))
+
+## [0.3.24] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.23...v0.3.24) - 2026-04-16
+
+### Features
+- add recorder IPC commands and Hyprland capture-first binds ([#119](https://github.com/better-slop/hyprwhspr-rs/pull/119))
+
+## [0.3.23] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.22...v0.3.23) - 2026-03-04
+
+### Fixes
+- *(config,injector)* add shift_insert object to paste_hints config ([#109](https://github.com/better-slop/hyprwhspr-rs/pull/109))
+
+## [0.3.22] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.21...v0.3.22) - 2026-03-03
+
+### Other
+- add quickshell integration example ([#92](https://github.com/better-slop/hyprwhspr-rs/pull/92))
+
+## [0.3.21] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.20...v0.3.21) - 2026-03-03
+
+### Chores
+- api key docs ([#105](https://github.com/better-slop/hyprwhspr-rs/pull/105))
+
+
+### Docs
+- add nix usage to readme ([#80](https://github.com/better-slop/hyprwhspr-rs/pull/80))
+
+
+### Features
+- more badges
+- readme badges
+
+
+### Fixes
+- lazy-init enigo fallback to avoid idle suppression ([#107](https://github.com/better-slop/hyprwhspr-rs/pull/107))
+
+## [0.3.20] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.19...v0.3.20) - 2026-02-10
+
+### Chores
+- fmt readme
+- *(docs)* mention `--no-default-features` install in readme
+
+## [0.3.19] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.18...v0.3.19) - 2026-02-10
+
+### Features
+- remove ghost deps and update outdated ([#100](https://github.com/better-slop/hyprwhspr-rs/pull/100))
+
+
+### Fixes
+- write absolute ExecStart in systemd install ([#98](https://github.com/better-slop/hyprwhspr-rs/pull/98))
+
+## [0.3.18] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.17...v0.3.18) - 2026-02-10
+
+### Chores
+- *(deps)* bump time from 0.3.44 to 0.3.47 ([#95](https://github.com/better-slop/hyprwhspr-rs/pull/95))
+- *(docs)* update integration examples & adds contributing.md ([#90](https://github.com/better-slop/hyprwhspr-rs/pull/90))
+
+
+### Features
+- update actions ([#96](https://github.com/better-slop/hyprwhspr-rs/pull/96))
+
+
+### Other
+- paths ([#93](https://github.com/better-slop/hyprwhspr-rs/pull/93))
+- Migrate workflows to Blacksmith ([#94](https://github.com/better-slop/hyprwhspr-rs/pull/94))
+
 ## [0.3.17] (https://github.com/better-slop/hyprwhspr-rs/compare/v0.3.16...v0.3.17) - 2026-02-03
 
 ### Features

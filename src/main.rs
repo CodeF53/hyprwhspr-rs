@@ -1,11 +1,12 @@
 use anyhow::Result;
 use clap::Parser;
 use hyprwhspr_rs::{
-    cli::{Cli, Command},
+    cli::{Cli, Command, RecordAction},
     config::TranscriptionProvider,
+    control::RecordCommand,
     install,
     logging::TextPipelineFormatter,
-    ConfigManager, HyprwhsprApp,
+    send_record_command, ConfigManager, HyprwhsprApp,
 };
 use tokio::signal;
 use tracing::info;
@@ -16,8 +17,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle install command before initializing logging (it has its own output)
-    if let Some(Command::Install(args)) = cli.command {
-        return install::run_install(&args);
+    if let Some(command) = cli.command {
+        match command {
+            Command::Install(args) => return install::run_install(&args),
+            Command::Record(args) => {
+                let command = match args.action {
+                    RecordAction::Start => RecordCommand::Start,
+                    RecordAction::Stop => RecordCommand::Stop,
+                    RecordAction::Toggle => RecordCommand::Toggle,
+                    RecordAction::Status => RecordCommand::Status,
+                };
+                let state = send_record_command(command).await?;
+                println!("{state}");
+                return Ok(());
+            }
+        }
     }
 
     // Initialize logging
@@ -65,7 +79,7 @@ async fn main() -> Result<()> {
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application
-    let app = HyprwhsprApp::new(config_manager)?;
+    let mut app = HyprwhsprApp::new(config_manager)?;
 
     // Set up signal handling
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -113,6 +127,7 @@ async fn main() -> Result<()> {
 
     // Cleanup
     info!("🛑 Shutting down hyprwhspr-rs...");
+    app.cleanup().await?;
     info!("✅ Shutdown complete");
 
     Ok(())

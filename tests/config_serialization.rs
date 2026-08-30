@@ -1,6 +1,32 @@
 use hyprwhspr_rs::Config;
 
 #[test]
+fn checked_in_schema_is_current() {
+    let generated = format!(
+        "{}\n",
+        hyprwhspr_rs::config::generated_schema_json().expect("generate schema")
+    );
+    let checked_in = include_str!("../config/schema.json");
+
+    assert_eq!(checked_in, generated);
+}
+
+#[test]
+fn schema_allows_null_vad_max_speech_s() {
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../config/schema.json")).expect("parse schema");
+    let max_speech_s = schema
+        .pointer("/$defs/VadConfig/properties/max_speech_s/type")
+        .expect("max_speech_s type schema");
+
+    assert_eq!(
+        max_speech_s,
+        &serde_json::json!(["number", "null"]),
+        "schema should match runtime deserialization, where max_speech_s: null means unlimited"
+    );
+}
+
+#[test]
 fn default_config_omits_infinite_max_speech_s() {
     let config = Config::default();
     let json = serde_json::to_string_pretty(&config).expect("serialize config");
@@ -55,4 +81,20 @@ fn legacy_primary_shortcut_populates_press_even_with_hold() {
 
     assert_eq!(config.shortcuts.hold.as_deref(), Some("SUPER+R"));
     assert_eq!(config.shortcuts.press.as_deref(), Some("SUPER+SHIFT+R"));
+}
+
+#[test]
+fn paste_hints_shift_insert_deserializes() {
+    let json = r#"{
+        "paste_hints":{
+            "shift":["zed"],
+            "shift_insert":["dev.zed.Zed"]
+        }
+    }"#;
+    let config: Config = serde_json::from_str(json).expect("deserialize config");
+    assert_eq!(config.paste_hints.shift, vec!["zed".to_string()]);
+    assert_eq!(
+        config.paste_hints.shift_insert,
+        vec!["dev.zed.Zed".to_string()]
+    );
 }

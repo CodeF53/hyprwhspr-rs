@@ -2,7 +2,9 @@ use crate::paths::expand_tilde;
 use crate::transcription::DEFAULT_PROMPT;
 use anyhow::{anyhow, Context, Result};
 use jsonc_parser::{parse_to_serde_value, ParseOptions};
-use serde::{Deserialize, Deserializer, Serialize};
+use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -13,7 +15,12 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio::time;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub fn generated_schema_json() -> Result<String> {
+    let schema = schemars::schema_for!(Config);
+    serde_json::to_string_pretty(&schema).context("Failed to serialize config JSON schema")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ShortcutsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hold: Option<String>,
@@ -31,20 +38,26 @@ impl Default for ShortcutsConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct PasteHintsConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shift: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shift_insert: Vec<String>,
 }
 
 impl Default for PasteHintsConfig {
     fn default() -> Self {
-        Self { shift: Vec::new() }
+        Self {
+            shift: Vec::new(),
+            shift_insert: Vec::new(),
+        }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Config {
     #[serde(default = "default_primary_shortcut", skip_serializing)]
     pub primary_shortcut: String,
@@ -256,7 +269,7 @@ fn default_fast_vad_volatility_decrease_threshold() -> f32 {
     0.12
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct VadConfig {
     pub enabled: bool,
@@ -269,6 +282,7 @@ pub struct VadConfig {
         deserialize_with = "deserialize_vad_max_speech_s",
         skip_serializing_if = "is_f32_non_finite"
     )]
+    #[schemars(with = "Option<f32>")]
     pub max_speech_s: f32,
     pub speech_pad_ms: u32,
     pub samples_overlap: f32,
@@ -289,7 +303,7 @@ impl Default for VadConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FastVadProfileConfig {
     Quality,
@@ -304,7 +318,7 @@ impl Default for FastVadProfileConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct FastVadConfig {
     pub enabled: bool,
@@ -334,13 +348,13 @@ impl Default for FastVadConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptionProvider {
     WhisperCpp,
     Groq,
     Gemini,
     Parakeet,
+    Custom(String),
 }
 
 impl Default for TranscriptionProvider {
@@ -350,17 +364,76 @@ impl Default for TranscriptionProvider {
 }
 
 impl TranscriptionProvider {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> Cow<'static, str> {
         match self {
-            TranscriptionProvider::WhisperCpp => "Local",
-            TranscriptionProvider::Groq => "Groq",
-            TranscriptionProvider::Gemini => "Gemini",
-            TranscriptionProvider::Parakeet => "Parakeet TDT",
+            TranscriptionProvider::WhisperCpp => Cow::Borrowed("Local"),
+            TranscriptionProvider::Groq => Cow::Borrowed("Groq"),
+            TranscriptionProvider::Gemini => Cow::Borrowed("Gemini"),
+            TranscriptionProvider::Parakeet => Cow::Borrowed("Parakeet TDT"),
+            TranscriptionProvider::Custom(name) => Cow::Owned(format!("Custom ({name})")),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+impl Serialize for TranscriptionProvider {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = match self {
+            TranscriptionProvider::WhisperCpp => "whisper_cpp".to_string(),
+            TranscriptionProvider::Groq => "groq".to_string(),
+            TranscriptionProvider::Gemini => "gemini".to_string(),
+            TranscriptionProvider::Parakeet => "parakeet".to_string(),
+            TranscriptionProvider::Custom(name) => format!("custom.{name}"),
+        };
+        serializer.serialize_str(&value)
+    }
+}
+
+impl<'de> Deserialize<'de> for TranscriptionProvider {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "whisper_cpp" => Ok(TranscriptionProvider::WhisperCpp),
+            "groq" => Ok(TranscriptionProvider::Groq),
+            "gemini" => Ok(TranscriptionProvider::Gemini),
+            "parakeet" => Ok(TranscriptionProvider::Parakeet),
+            _ => value
+                .strip_prefix("custom.")
+                .filter(|name| !name.trim().is_empty())
+                .map(|name| TranscriptionProvider::Custom(name.to_string()))
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!("unknown transcription provider '{value}'"))
+                }),
+        }
+    }
+}
+
+impl JsonSchema for TranscriptionProvider {
+    fn schema_name() -> Cow<'static, str> {
+        "TranscriptionProvider".into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "anyOf": [
+                {
+                    "enum": ["whisper_cpp", "groq", "gemini", "parakeet"]
+                },
+                {
+                    "pattern": "^custom\\.[A-Za-z0-9_-]+$"
+                }
+            ]
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct WhisperCppConfig {
     pub prompt: String,
@@ -388,7 +461,7 @@ impl Default for WhisperCppConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct GroqConfig {
     pub model: String,
@@ -406,7 +479,7 @@ impl Default for GroqConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct GeminiConfig {
     pub model: String,
@@ -433,7 +506,7 @@ fn default_parakeet_model_dir() -> String {
     "models/parakeet/parakeet-tdt-0.6b-v3-onnx".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct ParakeetConfig {
     pub model_dir: String,
@@ -449,7 +522,261 @@ impl Default for ParakeetConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomProviderKind {
+    #[serde(rename = "openai_audio_transcriptions")]
+    OpenAiAudioTranscriptions,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct ValueSource {
+    pub env: Option<String>,
+    pub value: Option<String>,
+}
+
+impl ValueSource {
+    pub fn resolve(&self, field_name: &str) -> Result<String> {
+        if let Some(env_name) = self
+            .env
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if let Ok(value) = env::var(env_name) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Ok(trimmed.to_string());
+                }
+            }
+        }
+
+        if let Some(value) = self
+            .value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(value.to_string());
+        }
+
+        Err(anyhow!("{field_name} is required"))
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct SecretSource {
+    pub env: Option<String>,
+    pub file: Option<String>,
+    pub file_env: Option<String>,
+}
+
+impl SecretSource {
+    pub fn resolve(&self, field_name: &str) -> Result<Option<String>> {
+        if let Some(env_name) = self
+            .file_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if let Ok(path) = env::var(env_name) {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    return Self::read_secret_file(trimmed, field_name).map(Some);
+                }
+            }
+        }
+
+        if let Some(path) = self
+            .file
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            return Self::read_secret_file(path, field_name).map(Some);
+        }
+
+        if let Some(env_name) = self
+            .env
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if let Ok(value) = env::var(env_name) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Ok(Some(trimmed.to_string()));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn read_secret_file(path: &str, field_name: &str) -> Result<String> {
+        let value = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {field_name} secret file: {path}"))?;
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("{field_name} secret file is empty: {path}"));
+        }
+        Ok(trimmed.to_string())
+    }
+}
+
+fn default_subscription_json_pointer() -> String {
+    "/tokens/access_token".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct SubscriptionAuthSource {
+    /// Reads a bearer token directly from an environment variable.
+    pub env: Option<String>,
+    /// Reads a JSON auth file, such as ~/.codex/auth.json.
+    pub file: Option<String>,
+    /// Reads the JSON auth file path from an environment variable.
+    pub file_env: Option<String>,
+    /// JSON Pointer for the bearer token inside the auth file.
+    pub json_pointer: Option<String>,
+}
+
+impl Default for SubscriptionAuthSource {
+    fn default() -> Self {
+        Self {
+            env: None,
+            file: None,
+            file_env: None,
+            json_pointer: Some(default_subscription_json_pointer()),
+        }
+    }
+}
+
+impl SubscriptionAuthSource {
+    pub fn is_configured(&self) -> bool {
+        self.env
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+            || self
+                .file
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            || self
+                .file_env
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+    }
+
+    pub fn resolve(&self, field_name: &str) -> Result<Option<String>> {
+        if let Some(env_name) = self
+            .env
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if let Ok(value) = env::var(env_name) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Ok(Some(trimmed.to_string()));
+                }
+            }
+        }
+
+        if let Some(env_name) = self
+            .file_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if let Ok(path) = env::var(env_name) {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    return Self::read_json_token(
+                        trimmed,
+                        self.json_pointer.as_deref(),
+                        field_name,
+                    )
+                    .map(Some);
+                }
+            }
+        }
+
+        if let Some(path) = self
+            .file
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            return Self::read_json_token(path, self.json_pointer.as_deref(), field_name).map(Some);
+        }
+
+        Ok(None)
+    }
+
+    fn read_json_token(path: &str, json_pointer: Option<&str>, field_name: &str) -> Result<String> {
+        let expanded = expand_tilde(path);
+        let value = fs::read_to_string(&expanded)
+            .with_context(|| format!("Failed to read {field_name} auth file: {path}"))?;
+        let json: serde_json::Value = serde_json::from_str(&value)
+            .with_context(|| format!("Failed to parse {field_name} auth JSON: {path}"))?;
+
+        let pointer = json_pointer
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("/tokens/access_token");
+        let token = json
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow!("{field_name} token missing at JSON pointer {pointer}: {path}")
+            })?;
+
+        Ok(token.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct CustomProviderConfig {
+    pub kind: CustomProviderKind,
+    pub label: Option<String>,
+    pub base_url: ValueSource,
+    pub endpoint: String,
+    pub model: String,
+    pub audio_format: String,
+    pub api_key: SecretSource,
+    pub subscription: SubscriptionAuthSource,
+    pub headers: HashMap<String, String>,
+    pub body: HashMap<String, String>,
+    pub prompt: String,
+}
+
+impl Default for CustomProviderConfig {
+    fn default() -> Self {
+        Self {
+            kind: CustomProviderKind::OpenAiAudioTranscriptions,
+            label: None,
+            base_url: ValueSource::default(),
+            endpoint: "/v1/audio/transcriptions".to_string(),
+            model: String::new(),
+            audio_format: "wav".to_string(),
+            api_key: SecretSource::default(),
+            subscription: SubscriptionAuthSource::default(),
+            headers: HashMap::new(),
+            body: HashMap::new(),
+            prompt: default_whisper_prompt(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(default)]
 pub struct TranscriptionConfig {
     pub provider: TranscriptionProvider,
@@ -459,6 +786,7 @@ pub struct TranscriptionConfig {
     pub groq: GroqConfig,
     pub gemini: GeminiConfig,
     pub parakeet: ParakeetConfig,
+    pub custom: HashMap<String, CustomProviderConfig>,
 }
 
 impl Default for TranscriptionConfig {
@@ -471,6 +799,7 @@ impl Default for TranscriptionConfig {
             groq: GroqConfig::default(),
             gemini: GeminiConfig::default(),
             parakeet: ParakeetConfig::default(),
+            custom: HashMap::new(),
         }
     }
 }
@@ -749,33 +1078,7 @@ impl ConfigManager {
     }
 
     pub fn get_whisper_binary_candidates(&self, include_fallbacks: bool) -> Vec<PathBuf> {
-        let home = env::var("HOME").expect("HOME not set");
-        let local_dir = PathBuf::from(&home).join(".local/share/hyprwhspr-rs/whisper.cpp");
-        let build_bin = local_dir.join("build/bin");
-
-        let mut candidates = Vec::new();
-        let push_candidate = |path: PathBuf, list: &mut Vec<PathBuf>| {
-            if path.exists() && !list.contains(&path) {
-                list.push(path);
-            }
-        };
-
-        // Prefer the managed local build if available
-        push_candidate(build_bin.join("whisper-cli"), &mut candidates);
-        push_candidate(local_dir.join("whisper-cli"), &mut candidates);
-
-        // System-installed whisper-cli (e.g., from packages)
-        push_candidate(PathBuf::from("/usr/bin/whisper-cli"), &mut candidates);
-
-        if include_fallbacks {
-            push_candidate(build_bin.join("main"), &mut candidates);
-            push_candidate(build_bin.join("whisper"), &mut candidates);
-            push_candidate(local_dir.join("main"), &mut candidates);
-            push_candidate(local_dir.join("whisper"), &mut candidates);
-            push_candidate(PathBuf::from("/usr/bin/whisper"), &mut candidates);
-        }
-
-        candidates
+        Self::discover_whisper_binary_candidates(include_fallbacks)
     }
 
     pub fn get_temp_dir(&self) -> PathBuf {
@@ -790,12 +1093,119 @@ impl ConfigManager {
     }
 
     pub fn get_assets_dir(&self) -> PathBuf {
-        let install_path = PathBuf::from("/usr/lib/hyprwhspr-rs/share/assets");
-        if install_path.exists() {
-            return install_path;
+        Self::discover_assets_dir()
+    }
+
+    fn discover_whisper_binary_candidates(include_fallbacks: bool) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        let mut push_candidate = |path: PathBuf| {
+            if path.exists() && !candidates.contains(&path) {
+                candidates.push(path);
+            }
+        };
+
+        // Prefer the managed local build if available (XDG-aware)
+        if let Some(project_dirs) = directories::ProjectDirs::from("", "", "hyprwhspr-rs") {
+            let local_dir = project_dirs.data_dir().join("whisper.cpp");
+            let build_bin = local_dir.join("build/bin");
+
+            push_candidate(build_bin.join("whisper-cli"));
+            push_candidate(local_dir.join("whisper-cli"));
+            if include_fallbacks {
+                push_candidate(build_bin.join("main"));
+                push_candidate(build_bin.join("whisper"));
+                push_candidate(local_dir.join("main"));
+                push_candidate(local_dir.join("whisper"));
+            }
         }
 
-        PathBuf::from("assets")
+        // Compatibility: legacy managed build under $HOME
+        if let Ok(home) = env::var("HOME") {
+            let local_dir = PathBuf::from(home).join(".local/share/hyprwhspr-rs/whisper.cpp");
+            let build_bin = local_dir.join("build/bin");
+
+            push_candidate(build_bin.join("whisper-cli"));
+            push_candidate(local_dir.join("whisper-cli"));
+            if include_fallbacks {
+                push_candidate(build_bin.join("main"));
+                push_candidate(build_bin.join("whisper"));
+                push_candidate(local_dir.join("main"));
+                push_candidate(local_dir.join("whisper"));
+            }
+        }
+
+        // Prefer PATH discovery for system-installed binaries (covers /usr/bin, nix profiles, etc.)
+        for path in Self::find_binaries_on_path(&["whisper-cli"]) {
+            push_candidate(path);
+        }
+        if include_fallbacks {
+            for path in Self::find_binaries_on_path(&["whisper", "main"]) {
+                push_candidate(path);
+            }
+        }
+
+        candidates
+    }
+
+    fn find_binaries_on_path(names: &[&str]) -> Vec<PathBuf> {
+        let Some(path_os) = env::var_os("PATH") else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        for dir in env::split_paths(&path_os) {
+            for name in names {
+                let candidate = dir.join(name);
+                if candidate.exists() && !out.contains(&candidate) {
+                    out.push(candidate);
+                }
+            }
+        }
+        out
+    }
+
+    fn discover_assets_dir() -> PathBuf {
+        if let Ok(dir) = env::var("HYPRWHSPR_ASSETS_DIR") {
+            let path = PathBuf::from(dir);
+            if path.is_dir() {
+                return path;
+            }
+        }
+
+        if let Ok(exe_path) = env::current_exe() {
+            if let Some(prefix) = exe_path.parent().and_then(|p| p.parent()) {
+                let candidate = prefix.join("share/hyprwhspr-rs/assets");
+                if candidate.is_dir() {
+                    return candidate;
+                }
+
+                // Compatibility with packagers that install assets directly under share/assets
+                let candidate = prefix.join("share/assets");
+                if candidate.is_dir() {
+                    return candidate;
+                }
+
+                // Legacy compatibility: historical /usr/lib/hyprwhspr-rs/share/assets layout
+                let candidate = prefix.join("lib/hyprwhspr-rs/share/assets");
+                if candidate.is_dir() {
+                    return candidate;
+                }
+            }
+        }
+
+        if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+            let candidate = PathBuf::from(manifest_dir).join("assets");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+
+        let candidate = PathBuf::from("assets");
+        if candidate.is_dir() {
+            return candidate;
+        }
+
+        candidate
     }
 
     fn read_config_from_disk(path: &Path) -> Result<Config> {
@@ -955,7 +1365,10 @@ impl ConfigManager {
 mod tests {
     use super::{Config, ConfigManager};
     use std::fs;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn resolve_model_path_prefers_existing_dir() {
@@ -983,6 +1396,98 @@ mod tests {
         let resolved = ConfigManager::resolve_model_path(&config).expect("model path");
         assert_eq!(resolved, model_file);
 
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn whisper_binary_candidates_include_path_binaries() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hyprwhspr-path-test-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        fs::create_dir_all(&root).expect("tmp dir");
+
+        let fake = root.join("whisper-cli");
+        fs::write(&fake, b"#!/bin/sh\necho hi\n").expect("write fake");
+
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", root.as_os_str());
+        let candidates = ConfigManager::discover_whisper_binary_candidates(false);
+
+        match old_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert!(candidates.contains(&fake));
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn whisper_binary_candidates_include_xdg_managed_build() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hyprwhspr-xdg-data-test-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        fs::create_dir_all(&root).expect("tmp dir");
+
+        let managed_dir = root.join("hyprwhspr-rs/whisper.cpp/build/bin");
+        fs::create_dir_all(&managed_dir).expect("managed dir");
+        let fake = managed_dir.join("whisper-cli");
+        fs::write(&fake, b"fake").expect("write fake");
+
+        let old_xdg = std::env::var_os("XDG_DATA_HOME");
+        std::env::set_var("XDG_DATA_HOME", root.as_os_str());
+        let candidates = ConfigManager::discover_whisper_binary_candidates(false);
+
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(candidates.contains(&fake));
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn assets_dir_can_be_overridden_by_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hyprwhspr-assets-test-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        fs::create_dir_all(&root).expect("tmp dir");
+
+        let old = std::env::var_os("HYPRWHSPR_ASSETS_DIR");
+        std::env::set_var("HYPRWHSPR_ASSETS_DIR", root.as_os_str());
+        let discovered = ConfigManager::discover_assets_dir();
+
+        match old {
+            Some(v) => std::env::set_var("HYPRWHSPR_ASSETS_DIR", v),
+            None => std::env::remove_var("HYPRWHSPR_ASSETS_DIR"),
+        }
+
+        assert_eq!(discovered, root);
         fs::remove_dir_all(&root).expect("cleanup");
     }
 }

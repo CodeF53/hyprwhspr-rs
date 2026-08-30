@@ -6,7 +6,18 @@
   <pre><code>cargo install hyprwhspr-rs</code></pre>
 </div>
 
-[![release-plz](https://github.com/better-slop/hyprwhspr-rs/actions/workflows/release-plz.yml/badge.svg)](https://github.com/better-slop/hyprwhspr-rs/actions/workflows/release-plz.yml)
+<p align="center">
+  <!-- <a href="https://github.com/better-slop/hyprwhspr-rs/actions/workflows/release-plz.yml"> -->
+  <!--   <img src="https://github.com/better-slop/hyprwhspr-rs/actions/workflows/release-plz.yml/badge.svg" alt="release-plz" /> -->
+  <!-- </a> -->
+  <img src="https://img.shields.io/github/v/release/better-slop/hyprwhspr-rs" alt="GitHub Release" />
+  <a href="https://crates.io/crates/hyprwhspr-rs">
+    <img src="https://img.shields.io/crates/d/hyprwhspr-rs.svg" alt="crates downloads" />
+  </a>
+  <a href="https://github.com/better-slop/hyprwhspr-rs/blob/main/LICENSE">
+    <img src="https://img.shields.io/crates/l/hyprwhspr-rs.svg" alt="license" />
+  </a>
+</p>
 
 <hr />
 
@@ -15,30 +26,68 @@ https://github.com/user-attachments/assets/bbbaa1c3-1a7e-4165-ad3d-27b7465e201a
 ## Requirements
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
+  - Ensure `whisper-cli` is available on your `PATH` (or use the managed build locations).
 - libudev + pkg-config (required for hotplug detection; `libudev-dev` on Debian/Ubuntu)
 - GNU-only binaries (no musl releases)
 - Groq or Gemini API key (optional)
+  - Use `GROQ_API_KEY` for provider `groq`
+  - Use `GEMINI_API_KEY` for provider `gemini`
   - Groq with whisper is cheap (~$0.10 USD/month) and fast as hell. [[Data Controls](https://console.groq.com/settings/data-controls)]
   - Comparatively, Gemini is very slow but offers better output formatting.
+- ChatGPT account via Codex auth (optional)
+  - Use `custom.openai-codex` with `~/.codex/auth.json`
 - Parakeet TDT (optional) - NVIDIA's local ASR model via ONNX
   - Run `./scripts/download-parakeet-tdt.sh` to download model files (~1.2GB)
   - Very fast, but not as accurate as whisper or Gemini
+- For custom OpenAI-compatible providers, see [configuration](#configuration) below
 
 ## Features
 
 - Fast speech-to-text
 - Intuitive configuration
-  - word overrides ([many are already baked in](https://github.com/better-slop/hyprwhspr-rs/blob/58f192b5a69a3d334b9a3d547b3ef5dd350c8678/src/input/injector.rs#L423-L639))
-  - multi provider support
+  - word overrides use a bit of regex and inverse text normalization (ITN) by [FluidInference](https://github.com/FluidInference/text-processing-rs) (see below)
+  - multi provider support (OpenAI, local whisper, parakeet) - websocket support coming soon!
   - hot reloading during runtime
 - Optional fast VAD trims (`fast_vad.enabled`) audio files, reducing inferences costs while increasing output speed
+
+```txt
+┌─ Text Pipeline (steps: 11, changed: 4)
+│ IN  : Yep. Tab, newline, test, newline, newline, test, open parenthesis, hello world, close parenthesis, period
+│ • inverse_text_normalization (applied ×62)
+│   - Yep. Tab, newline, test, newline, newline, test, open parenthesis, hello world, close parenthesis, period
+│   + Yep. Tab, newline, test, newline, newline, test, (, hello world, ), .
+│ • control_commands (applied ×4)
+│   - Yep. Tab, newline, test, newline, newline, test, (, hello world, ), .
+│   + Yep. ⇥, ⏎, test, ⏎, ⏎, test, (, hello world, ), .
+│ • control_artifact_cleanup (applied)
+│   - Yep. ⇥, ⏎, test, ⏎, ⏎, test, (, hello world, ), .
+│   + Yep.⏎test,⏎⏎test, (hello world).
+│ • capitalize_after_period (applied ×2)
+│   - Yep.⏎test,⏎⏎test, (hello world).
+│   + Yep.⏎Test,⏎⏎Test, (hello world).
+│ OUT : Yep.⏎Test,⏎⏎Test, (hello world).
+└─
+```
 
 ## Built for Hyprland
 
 - Detects Hyprland via `HYPRLAND_INSTANCE_SIGNATURE` and opens the IPC socket at `$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`.
 - Execs `dispatch sendshortcut` commands against the active window to paste dictated text, inspecting `activewindow` to decide when `Shift` is required for a hardcoded list of programs.
 - Falls back to a Wayland virtual keyboard client or a simulated keypress paste if IPC communication fails.
+- Supports daemon control commands via `hyprwhspr-rs record {start|stop|toggle|status}` so Hyprland can own shortcut capture with `bind` / `bindr`.
 - **See the [example docs](https://github.com/better-slop/hyprwhspr-rs/tree/main/docs/examples) for additional integration paths outside of Waybar and Walker/Elephant.**
+
+### Hyprland capture-first binds
+
+The Linux Kernel treats input grabbing as an exclusive operation. If `hyprwhspr-rs` were to grab a keyboard device directly with `EVIOCGRAB`, it would become the sole recipient of that device's events until the grab was released. That is the wrong layer for push-to-talk dictation because it would require re-injecting every non-shortcut keypress through a virtual keyboard just to preserve normal typing.
+
+For Hyprland, the cleaner approach is to let the compositor own shortcut capture and have `hyprwhspr-rs` expose recorder controls over a local socket. In practice, that means keeping the daemon running in the background and binding `record start` / `record stop` / `record toggle` directly in Hyprland:
+
+```ini
+bind = ALT, grave, exec, hyprwhspr-rs record start
+bindr = ALT, grave, exec, hyprwhspr-rs record stop
+bind = ALT, SPACE, exec, hyprwhspr-rs record toggle
+```
 
 ## Installation
 
@@ -46,18 +95,69 @@ https://github.com/user-attachments/assets/bbbaa1c3-1a7e-4165-ad3d-27b7465e201a
 
 1. Install the latest release from [crates.io](https://crates.io/crates/hyprwhspr-rs)
 
-```
-cargo install hyprwhspr-rs
-```
+   ```bash
+   cargo install hyprwhspr-rs
+   ```
+
+   Omit `parakeet` backend:
+
+   ```bash
+   cargo install hyprwhspr-rs --no-default-features
+   ```
 
 2. Install systemd service and Waybar module (optionally, with a WIP elephant/walker menu using `--with-elephant` flag)
 
-```bash
-# Interactive install
-hyprwhspr-rs install
+   ```bash
+   # Interactive install
+   hyprwhspr-rs install
 
-# Optionally, install specific components (systemd, waybar, elephant)
-hyprwhspr-rs install {--all| --service | --waybar | --elephant} {--force | -f}
+   # Optionally, install specific components (systemd, waybar, elephant)
+   hyprwhspr-rs install {--all| --service | --waybar | --elephant} {--force | -f}
+   ```
+
+Notes:
+
+- The installer writes the systemd unit with an absolute `ExecStart=` pointing at the `hyprwhspr-rs` binary you ran `hyprwhspr-rs install` with. If you copy the unit template manually, ensure `hyprwhspr-rs` is resolvable by systemd (PATH / drop-in override).
+- If audio start/stop sounds are missing in your packaging setup, you can point the app at an installed assets directory with `HYPRWHSPR_ASSETS_DIR=/path/to/assets`.
+
+### Using Nix
+
+You can install the `hyprwhspr-rs` package from nixpkgs.
+
+With NixOS:
+
+```nix
+{
+  # required to listen for keyboard shortcuts
+  users.users.<username>.extraGroups = [ "input" ];
+
+  # have it auto start as a systemd unit with
+  services.hyprwhspr-rs.enable = true;
+  # or just add it to your systemPackages
+  environment.systemPackages = [ pkgs.hyprwhspr-rs ];
+
+  # optional: to enable cuda (for AMD do `rocmSupport` instead of `cudaSupport`)
+  # cuda is unfree so not in the default nixos build caches
+  # I highly recommend adding the cuda build cache to your nixconfig https://discourse.nixos.org/t/cuda-cache-for-nix-community/56038
+  services.hyprwhspr-rs = {
+    enable = true;
+    package = pkgs.hyprwhspr-rs.override {
+      # to optimize build time you can skip enabling cudaSupport for one of these two
+      # for whisper do whisper-cpp, for NVIDIA Parakeet do onnxruntime
+      whispercpp = pkgs.whisper-cpp.override { cudaSupport = true; };
+      onnxruntime = pkgs.onnxruntime.override { cudaSupport = true; };
+    };
+  };
+  # you can also enable cuda/rocm globally, but this will increase the build time for your entire system if you dont add the cuda build cache
+  nixpkgs.config.cudaSupport = true;
+
+  # if you use groq or gemini for transcription, you can autoload their keys with
+  services.hyprwhspr-rs = {
+    enable = true;
+    # put `GROQ_API_KEY=...` or `GEMINI_API_KEY=...` in the file you put at this path
+    environmentFile = "/path/to/hyprwhspr_secret_file";
+  };
+}
 ```
 
 ### From source
@@ -73,25 +173,34 @@ hyprwhspr-rs install {--all| --service | --waybar | --elephant} {--force | -f}
 ./scripts/install-waybar.sh
 ```
 
-Installs systemd service, Waybar module, and CSS styles. Shows mic status in your bar.
-
-## Development
-
-1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
-2. `cd hyprwhspr-rs`
-3. `cargo build --release`
-4. Run using:
-   - pretty logs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
-   - production release: `./target/release/hyprwhspr-rs`
+## Configuration
 
 <details>
+    <summary>
+        <strong>Example hyprland bindings config</strong>
+        <p>Configure in, e.g., <code>~/.config/hypr/hyprland.conf</code></p>
+    </summary>
+
+```ini
+# hold
+bind = ALT, GRAVE, exec, hyprwhspr-rs record start
+bindr = ALT, GRAVE, exec, hyprwhspr-rs record stop
+
+# tap
+bind = ALT, SPACE, exec, hyprwhspr-rs record toggle
+```
+
+</details>
+<details>
   <summary>
-    <strong>Example config</strong>
-    <p>Configure in ~/.config/hyprwhspr-rs/config.jsonc</p>
+    <strong>Example hyprwhspr-rs config</strong>
+    <p>Configure in <code>~/.config/hyprwhspr-rs/config.jsonc</code></p>
+    <p>Starting with <code>v0.28.0</code>, you may use <code>"$schema": "https://raw.githubusercontent.com/better-slop/hyprwhspr-rs/&lt;vX.X.X|main&gt;/config/schema.json"</code> to validate your config.</p>
   </summary>
 
 ```jsonc
 {
+  "$schema": "https://raw.githubusercontent.com/better-slop/hyprwhspr-rs/main/config/schema.json",
   "shortcuts": {
     "press": "SUPER+ALT+D",
     "hold": "SUPER+ALT+CTRL",
@@ -117,10 +226,13 @@ Installs systemd service, Waybar module, and CSS styles. Shows mic status in you
   "stop_sound_path": null, // Optional custom audio asset overrides
   "auto_copy_clipboard": true, // Automatically copy the final transcription to the clipboard
   "shift_paste": false, // Whether to force shift paste
-  "global_paste_shortcut": false, // Enable the compositor-level paste shortcut (Omarchy's addition)
+  "global_paste_shortcut": false, // Enable compositor-level paste; uses Hyprland sendshortcut with Shift+Insert for all pastes
   "paste_hints": {
     "shift": [
-      // Optional list of Hyprland window classes that should always paste with Ctrl+Shift+V
+      // List of window classes that will always paste with Ctrl+Shift+V
+    ],
+    "shift_insert": [
+      // List of window classes that will always paste with Shift+Insert
     ],
   },
   "audio_device": null, // Force a specific input device index (null uses system default)
@@ -136,7 +248,7 @@ Installs systemd service, Waybar module, and CSS styles. Shows mic status in you
     "volatility_decrease_threshold": 0.12, // Relax profile when toggles stay below this ratio
   },
   "transcription": {
-    "provider": "whisper_cpp", // whisper_cpp | groq | gemini | parakeet
+    "provider": "whisper_cpp", // whisper_cpp | groq | gemini | parakeet | custom.<name>
     "request_timeout_secs": 45,
     "max_retries": 2,
     "whisper_cpp": {
@@ -180,6 +292,50 @@ Installs systemd service, Waybar module, and CSS styles. Shows mic status in you
       "model_dir": "models/parakeet/parakeet-tdt-0.6b-v3-onnx", // Relative to $XDG_DATA_HOME/hyprwhspr-rs (or ~/.local/share/hyprwhspr-rs)
       "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation.",
     },
+    // "provider": "custom.remote_whisper",
+    "custom": {
+      "remote_whisper": {
+        "kind": "openai_audio_transcriptions",
+        "label": "Remote whisper.cpp",
+        "base_url": {
+          "env": "HYPRWHSPR_REMOTE_WHISPER_BASE_URL",
+          "value": "http://localhost:8080",
+        },
+        "endpoint": "/v1/audio/transcriptions",
+        "model": "whisper-large-v3",
+        "audio_format": "wav", // wav | flac; wav works with whisper.cpp server by default
+        "api_key": {
+          "env": "HYPRWHSPR_REMOTE_WHISPER_API_KEY",
+          "file": "/run/secrets/hyprwhspr-remote-key",
+          "file_env": "HYPRWHSPR_REMOTE_WHISPER_API_KEY_FILE",
+        },
+        "headers": {},
+        "body": {},
+        "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation.",
+      },
+      "openai-codex": {
+        "kind": "openai_audio_transcriptions",
+        "label": "OpenAI Codex gpt-4o-mini-transcribe",
+        "base_url": {
+          "value": "https://chatgpt.com/backend-api",
+        },
+        "endpoint": "/transcribe",
+        "model": "gpt-4o-mini-transcribe",
+        "audio_format": "wav",
+        "subscription": {
+          "file": "~/.codex/auth.json", // Reads /tokens/access_token by default
+          // "json_pointer": "/tokens/access_token",
+          // "file_env": "HYPRWHSPR_REMOTE_WHISPER_AUTH_FILE",
+          // "env": "HYPRWHSPR_REMOTE_WHISPER_AUTH_TOKEN",
+        },
+        "headers": {
+          "originator": "Codex Desktop",
+          "User-Agent": "Codex Desktop/26.527.60818 (X11; Linux; x64)",
+        },
+        "body": {},
+        "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation.",
+      },
+    },
   },
 }
 ```
@@ -188,20 +344,120 @@ Installs systemd service, Waybar module, and CSS styles. Shows mic status in you
 
 <details>
   <summary>
-    <strong>Earshot VAD trimming</strong> (optional)
-    <p>The default build ships with the <a href="https://crates.io/crates/earshot">earshot</a> VoiceActivityDetector baked in. Toggle <code>fast_vad.enabled</code> in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio. Extremely useful for lowering costs and increasing speed.</p>
+    <strong>Environment Variables</strong>
+    <p>Configuring providers and other overrides.</p>
   </summary>
 
+Use <code>transcription.provider</code> in <code>~/.config/hyprwhspr-rs/config.jsonc</code> to pick the backend.
+
+#### Provider API key environment variables
+
+- groq provider <strong>requires</strong>: <code>GROQ_API_KEY</code>
+- gemini provider <strong>requires</strong>: <code>GEMINI_API_KEY</code>
+- whisper_cpp (whisper-cli) <strong>does not require an API key; the binary is discovered via <code>PATH</code> and managed locations under <code> $XDG_DATA_HOME </code> / <code> $HOME </code> </strong>
+- custom providers use <code>transcription.custom.&lt;name&gt;.api_key</code>. Secret resolution prefers <code>file_env</code>, then <code>file</code>, then <code>env</code>. Empty/missing keys are allowed for no-auth local servers.
+- custom providers may use <code>transcription.custom.&lt;name&gt;.subscription</code> for bearer tokens from subscription auth files. If configured, subscription auth is required and <code>api_key</code> is not used.
+
+#### Custom OpenAI-compatible providers
+
+Set <code>transcription.provider</code> to <code>custom.&lt;name&gt;</code>, then define <code>transcription.custom.&lt;name&gt;</code>.
+
+```jsonc
+"transcription": {
+  "provider": "custom.remote_whisper",
+  "custom": {
+    "remote_whisper": {
+      "kind": "openai_audio_transcriptions",
+      "label": "Remote whisper.cpp",
+      "base_url": {
+        "env": "HYPRWHSPR_REMOTE_WHISPER_BASE_URL",
+        "value": "http://localhost:8080"
+      },
+      "endpoint": "/v1/audio/transcriptions",
+      "model": "whisper-large-v3",
+      "api_key": {
+        "env": "HYPRWHSPR_REMOTE_WHISPER_API_KEY",
+        "file": "/run/secrets/hyprwhspr-remote-key",
+        "file_env": "HYPRWHSPR_REMOTE_WHISPER_API_KEY_FILE"
+      },
+      "subscription": {
+        "file": "~/.codex/auth.json",
+        "json_pointer": "/tokens/access_token"
+      },
+      "headers": {},
+      "body": {},
+      "prompt": "Transcribe technical notes."
+    }
+  }
+}
+```
+
+For <code>whisper.cpp/examples/server</code>, start the server with <code>--inference-path /v1/audio/transcriptions</code> or set <code>endpoint</code> to <code>/inference</code>. Custom providers default to WAV uploads so the server does not need <code>--convert</code>.
+
+#### Recommended setup (systemd user service)
+
+<code>hyprwhspr-rs install</code> installs a user unit with:
+
+- <code>EnvironmentFile=-%h/.config/hyprwhspr-rs/env</code>
+
+**Otherwise, set the env vars in your shell.**
+
+#### Extra env vars that affect provider behavior
+
+- For <code>whisper_cpp</code> / <code>whisper-cli</code> discovery, the app also consults:
+  - <code>PATH</code> (searches for <code>whisper-cli</code>, optional fallback names)
+  - <code>XDG_DATA_HOME</code> / <code>HOME</code> (managed whisper.cpp locations)
+- For asset overrides (start/stop sounds): <code>HYPRWHSPR_ASSETS_DIR</code>
+- Resolution logic lives in:
+  - <code>src/config.rs</code> (<code>discover_whisper_binary_candidates</code>, <code>find_binaries_on_path</code>, <code>discover_assets_dir</code>)
+
+</details>
+
+<details>
+  <summary>
+    <strong>Earshot VAD trimming</strong> (recommended)
+    <p>The default build ships with the impressive and lightweight <a href="https://crates.io/crates/earshot">earshot</a> VoiceActivityDetector baked in. Toggle <code>fast_vad.enabled</code> in your config to trim silence before any provider sees the audio. Useful for lowering costs and increasing speed.</p>
+  </summary>
+
+#### Configuring `fast_vad`
+
+```jsonc
+"fast_vad": {
+  "enabled": false,
+  "profile": "aggressive", // quality | low_bitrate | aggressive | very_aggressive
+  "min_speech_ms": 120, // minimum speech chunk to keep
+  "silence_timeout_ms": 500, // silence length that ends a segment
+  "pre_roll_ms": 120, // speech-leading padding
+  "post_roll_ms": 150, // speech-trailing padding
+  "volatility_window": 24, // decision history window
+  "volatility_increase_threshold": 0.35, // become more aggressive above this
+  "volatility_decrease_threshold": 0.12 // relax aggressiveness below this
+}
+```
+
+#### About [`earshot`](https://crates.io/crates/earshot)
+
+- Works well for silence, not as accurate at speech compared to other models.
 - Operates on the 16 kHz PCM emitted by the capture layer and shares the trimmed buffer across all providers.
-- Drops silent stretches longer than the configured timeout while keeping configurable pre-roll and post-roll padding so
-  word edges remain intact.
+- Drops silent stretches longer than the configured timeout while keeping configurable pre-roll and post-roll padding so word edges remain intact.
 - Adapts Earshot’s aggressiveness based on recent speech/silence volatility—fewer uploads when the room is noisy.
-- If an entire recording is silent, the app short-circuits the upload path instead of dispatching an empty request.
+- If an entire recording is silent, the app attempts to short-circuit the upload path instead of dispatching an empty request.
 
 All other fields in the `fast_vad` block map directly to the trimmer’s behaviour, so you can tune aggressiveness without
 recompiling.
 
 </details>
+
+## Development
+
+1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
+2. `cd hyprwhspr-rs`
+3. `cargo build --release`
+   - Faster build (skips Parakeet backend): `cargo build --release --no-default-features`
+4. Run using:
+   - pretty logs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
+   - production release: `./target/release/hyprwhspr-rs`
+5. On schema changes, run `cargo run --bin generate-schema -- config/schema.json` and commit.
 
 <details>
   <summary>
